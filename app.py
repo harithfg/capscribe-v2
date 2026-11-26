@@ -2,6 +2,7 @@
 CapScribe V2 - Web-Based Accessible Lecture Recording
 Backend: FastAPI + Deepgram Nova-3 (diarization + keyterms + code-switching)
          + Groq Whisper (fallback STT) + Groq LLM (study summary)
+         + Auto-detect Dosen (pembicara dominan)
 """
 
 import io
@@ -37,7 +38,6 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB
 PARAGRAPH_GAP_S = 2.5
 MAX_BLOCK_CHARS = 420
 
-# Koreksi istilah berulang & filter halusinasi STT
 CORRECTIONS = {
     "mikro kontroler": "mikrokontroler",
     "ardu ino": "Arduino",
@@ -49,13 +49,13 @@ HALLUCINATION_PATTERNS = [
     r"(?i)jangan lupa (like|subscribe|komen).*?$",
     r"(?i)subtitles? by .*?$",
     r"(?i)thanks for watching\.?",
-    r"(.)\1{6,}",  # huruf berulang berlebihan (mis. "aaaaaaa")
+    r"(.)\1{6,}",
 ]
 
 # ---------------------------------------------------------------------------
 # App & Optional Basic Auth
 # ---------------------------------------------------------------------------
-app = FastAPI(title="CapScribe V2", version="2.0.0")
+app = FastAPI(title="CapScribe V2", version="2.1.0")
 security = HTTPBasic(auto_error=False)
 
 
@@ -97,7 +97,6 @@ def clean_text(text: str) -> str:
 
 
 def parse_keyterms(terms_str: str) -> list[str]:
-    """Pisahkan istilah (koma/baris baru), maks 95 item untuk Deepgram Nova-3."""
     if not terms_str:
         return []
     raw = re.split(r"[,;\n]+", terms_str)
@@ -126,8 +125,19 @@ def smooth_word_speakers(words: list[dict]) -> list[dict]:
     return words
 
 
+def detect_primary_speaker(blocks: list[dict]) -> Optional[int]:
+    """Pembicara dengan total kata terbanyak dianggap sebagai Dosen (Utama)."""
+    counts: dict[int, int] = {}
+    for b in blocks:
+        spk = b.get("speaker")
+        if spk is not None:
+            counts[spk] = counts.get(spk, 0) + len(b.get("text", "").split())
+    if not counts:
+        return None
+    return max(counts, key=counts.get)
+
+
 def build_blocks_from_deepgram(js: dict, use_diarize: bool) -> tuple[list[dict], float]:
-    """Bangun blok paragraf rapi dari word-level diarization Deepgram."""
     meta = js.get("metadata", {})
     duration_s = float(meta.get("duration") or 0.0)
 
@@ -337,9 +347,12 @@ async def api_transcribe(
         raise HTTPException(status_code=422, detail="Tidak ada ucapan yang terdeteksi dalam audio.")
 
     speakers = sorted({b["speaker"] for b in blocks if b.get("speaker") is not None})
+    primary_speaker = detect_primary_speaker(blocks)
+
     return JSONResponse({
         "blocks": blocks,
         "speakers": speakers,
+        "primary_speaker": primary_speaker,
         "duration_s": round(duration_s, 1),
         "engine_used": engine_used,
         "notice": notice,
@@ -350,6 +363,7 @@ class SummarizeRequest(BaseModel):
     transcript: str
     terms: str = ""
     language: str = "id"
+    primary_speaker_name: str = ""
 
 
 @app.post("/api/summarize")
@@ -360,12 +374,18 @@ async def api_summarize(req: SummarizeRequest, _: bool = Depends(verify_auth)):
     if len(text) < 40:
         raise HTTPException(status_code=400, detail="Transkrip terlalu pendek untuk diringkas.")
 
-    # Batasi input agar aman untuk limit token gratis Groq
     clipped = text[:28000]
     lang_hint = "Bahasa Indonesia" if req.language != "en" else "English"
+    lecturer_note = (
+        f" Jadikan ucapan dari '{req.primary_speaker_name}' sebagai sumber materi utama, "
+        "dan abaikan obrolan sampingan pembicara lain kecuali berupa pertanyaan kuliah yang relevan."
+        if req.primary_speaker_name.strip()
+        else ""
+    )
     system_prompt = (
         f"Kamu adalah asisten belajar mahasiswa yang teliti. Tulis output dalam {lang_hint} yang rapi dan jelas. "
         "Abaikan basa-basi, sapaan, atau obrolan di luar topik kuliah. Fokus pada konsep inti agar mahasiswa tidak kehilangan poin penting."
+        + lecturer_note
     )
     user_prompt = (
         f"Istilah/topik kuliah: {req.terms or '-'}\n\n"
