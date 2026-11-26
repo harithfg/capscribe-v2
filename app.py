@@ -434,7 +434,11 @@ async def api_summarize(req: SummarizeRequest, _: bool = Depends(verify_auth)):
     if len(text) < 40:
         raise HTTPException(status_code=400, detail="Transkrip terlalu pendek untuk diringkas.")
 
-    clipped = text[:28000]
+    # Jaga agar input tetap di bawah batas 8.000 token/menit Groq Free
+    if len(text) > 18000:
+        clipped = text[:12000] + "\n\n[...]\n\n" + text[-6000:]
+    else:
+        clipped = text
     lang_hint = "Bahasa Indonesia" if req.language != "en" else "English"
     lecturer_note = (
         f" Jadikan ucapan dari '{req.primary_speaker_name}' sebagai sumber materi utama, "
