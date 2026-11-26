@@ -4,7 +4,11 @@ Backend: FastAPI + Deepgram Nova-3 (diarization + keyterms + code-switching)
          + Groq Whisper (fallback STT) + Groq LLM (study summary)
          + Auto-detect Dosen (pembicara dominan)
 """
-
+# Tambahkan di import bagian atas app.py:
+import struct
+import zlib
+from functools import lru_cache
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 import io
 import os
 import re
@@ -284,6 +288,60 @@ async def transcribe_groq(
 # Routes
 # ---------------------------------------------------------------------------
 @app.get("/")
+# Tambahkan fungsi & route PWA ini di app.py (setelah @app.get("/")):
+@lru_cache(maxsize=2)
+def _generate_icon_png(size: int) -> bytes:
+    """Buat ikon PNG biru + simbol mikrofon putih tanpa perlu file gambar eksternal."""
+    rows = bytearray()
+    cx, cy = size / 2.0, size / 2.0
+    for y in range(size):
+        rows.append(0)  # filter type 0
+        t = y / size
+        bg_r = int(30 + (37 - 30) * t)
+        bg_g = int(58 + (99 - 58) * t)
+        bg_b = int(138 + (235 - 138) * t)
+        for x in range(size):
+            nx = (x - cx) / size
+            ny = (y - cy) / size
+            # Kapsul mic + tiang + alas
+            in_capsule = (abs(nx) <= 0.11 and -0.22 <= ny <= 0.04) or (
+                nx * nx + (ny + 0.22) ** 2 <= 0.11 ** 2
+            ) or (nx * nx + (ny - 0.04) ** 2 <= 0.11 ** 2)
+            r_arc = (nx * nx + (ny - 0.04) ** 2) ** 0.5
+            in_arc = ny >= 0.04 and (0.17 <= r_arc <= 0.215)
+            in_stem = abs(nx) <= 0.025 and 0.20 <= ny <= 0.30
+            in_base = abs(nx) <= 0.13 and 0.29 <= ny <= 0.335
+            if in_capsule or in_arc or in_stem or in_base:
+                rows.extend((255, 255, 255))
+            else:
+                rows.extend((bg_r, bg_g, bg_b))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack("!I", len(data)) + tag + data + struct.pack("!I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    ihdr = struct.pack("!IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    idat = zlib.compress(bytes(rows), 9)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+
+
+@app.get("/manifest.json")
+async def pwa_manifest():
+    return FileResponse("static/manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+async def pwa_sw():
+    return FileResponse("static/sw.js", media_type="application/javascript")
+
+
+@app.get("/icon-192.png")
+async def pwa_icon_192():
+    return Response(content=_generate_icon_png(192), media_type="image/png")
+
+
+@app.get("/icon-512.png")
+async def pwa_icon_512():
+    return Response(content=_generate_icon_png(512), media_type="image/png")
 async def index(_: bool = Depends(verify_auth)):
     return FileResponse("static/index.html")
 
