@@ -1,4 +1,4 @@
-const CACHE_NAME = 'capscribe-pwa-v1';
+const CACHE_NAME = 'capscribe-pwa-v2';
 const SHELL_URLS = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -18,10 +18,9 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.request ? event.request.url : event.request.url);
+  const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
 
-  // Network-first agar update kode selalu masuk, fallback ke cache saat offline
   event.respondWith(
     fetch(event.request)
       .then((res) => {
