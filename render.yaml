@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: capscribe-v2
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CAPSCRIBE_USER
+        sync: false
+      - key: CAPSCRIBE_PASS
+        sync: false
